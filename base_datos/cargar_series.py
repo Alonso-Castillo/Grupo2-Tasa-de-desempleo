@@ -71,7 +71,79 @@ SERIES = [
     "tema": "Mercado laboral",
     "unidad": "Miles de personas",
     "desde": "2010-03-01"
+},
+
+{
+    "codigo": "F049.AVS.IND.BCC1.01.M",
+    "nombre": "Índice de Avisos Laborales de Internet (IALI)",
+    "columna": "IALI_total",
+    "tema_id": 1,
+    "tema": "Mercado laboral",
+    "unidad": "Índice 2018=100",
+    "desde": "2017-01-01"
+},
+
+{
+    "codigo": "F034.PRM.IND.INE.2018.0.M",
+    "nombre": "Índice de Producción Manufacturera",
+    "columna": "Produccion_manufacturera",
+    "tema_id": 2,
+    "tema": "Actividad económica",
+    "unidad": "Índice 2018=100",
+    "desde": "2010-01-01"
+},
+
+{
+    "codigo": "F074.IPC.V12.Z.EP23.C.M",
+    "nombre": "Inflación IPC anual",
+    "columna": "Inflacion_IPC_anual",
+    "tema_id": 3,
+    "tema": "Precios",
+    "unidad": "Porcentaje",
+    "desde": "2011-01-01"
+},
+
+{
+    "codigo": "F022.TPM.TIN.D001.NO.Z.M",
+    "nombre": "Tasa de Política Monetaria (TPM)",
+    "columna": "TPM",
+    "tema_id": 4,
+    "tema": "Política monetaria",
+    "unidad": "Porcentaje",
+    "desde": "2010-01-01"
+},
+
+{
+    "codigo": "F019.PPB.PRE.40.M",
+    "nombre": "Precio del cobre refinado BML",
+    "columna": "Precio_cobre",
+    "tema_id": 5,
+    "tema": "Sector externo",
+    "unidad": "USD por libra",
+    "desde": "2010-01-01"
+},
+
+{
+    "codigo": "F073.TCO.PRE.HIST.M",
+    "nombre": "Tipo de cambio observado (CLP/USD)",
+    "columna": "Tipo_cambio",
+    "tema_id": 5,
+    "tema": "Sector externo",
+    "unidad": "CLP por USD",
+    "desde": "2010-01-01"
+},
+
+{
+    "codigo": "F032.PIB.FLU.R.CLP.EP18.Z.Z.0.T",
+    "nombre": "PIB total real",
+    "columna": "PIB_total",
+    "tema_id": 2,
+    "tema": "Actividad económica",
+    "unidad": "Miles de millones de pesos encadenados",
+    "frecuencia": "T",
+    "desde": "2010-01-01"
 }
+
 ]
 
 # 5. Conectarse a SQLite
@@ -107,7 +179,7 @@ with sqlite3.connect(RUTA_DB) as conexion:
             serie["codigo"],
             serie["nombre"],
             "BDE Banco Central de Chile",
-            "M",
+            serie.get("frecuencia", "M"),
             serie["unidad"],
             serie["tema_id"]
         ))
