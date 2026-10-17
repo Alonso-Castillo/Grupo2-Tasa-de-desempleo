@@ -1,0 +1,14 @@
+# Credenciales de acceso a APIs
+.env
+.env.*
+
+# Entornos virtuales de Python
+.venv/
+venv/
+
+# Archivos temporales de Python
+__pycache__/
+*.pyc
+
+# Archivos temporales de Jupyter
+.ipynb_checkpoints/
