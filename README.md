@@ -8,7 +8,8 @@ La variable objetivo es la tasa de desempleo nacional. La pregunta de proyecció
 
 ## Catálogo de series
 
-El catálogo se encuentra en `src/config.py`. Contiene 12 series, su código BDE, fuente, frecuencia, unidad, fecha inicial y una justificación económica. Antes de la carga final, verificar en la BDE que los códigos estén vigentes, que las unidades sean correctas y que exista al menos una década de historia mensual cuando corresponda. El PIB es trimestral.
+El catálogo se encuentra en `src/config.py` y contiene las 12 series del proyecto, con código BDE, nombre, tema, unidad, fecha inicial y justificación económica. La frecuencia se especifica explícitamente cuando corresponde y, para las series mensuales, el script de carga utiliza `M` como frecuencia por defecto. Todas las series provienen de la BDE del Banco Central de Chile.
+
 
 ## Requisitos
 
@@ -19,13 +20,19 @@ El catálogo se encuentra en `src/config.py`. Contiene 12 series, su código BDE
 ## Instalación en Windows / Visual Studio Code
 
 Abre una terminal en la carpeta raíz del repositorio y ejecuta:
-
+###Windows
 ```powershell
 py -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
+##macOS / Linux
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
 
 Si PowerShell no permite activar el entorno, usa la terminal CMD y ejecuta `.venv\\Scripts\\activate.bat`.
 
