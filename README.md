@@ -17,24 +17,49 @@ El catálogo se encuentra en `src/config.py` y contiene las 12 series del proyec
 - Acceso a internet para descargar datos desde la API Siete del Banco Central de Chile.
 - Token de acceso a la API Siete del Banco Central de Chile.
 
-## Instalación en Windows / Visual Studio Code
+## Instalación
 
-Abre una terminal en la carpeta raíz del repositorio y ejecuta:
-###Windows
+Primero se debe clonar el repositorio y abrir una terminal en la carpeta raíz del proyecto.
+
+### Windows
+
+Crear un entorno virtual:
+
 ```powershell
 py -m venv .venv
+
+Activarlo:
+
 .venv\Scripts\Activate.ps1
+
+Si PowerShell no permite activar el entorno, se puede utilizar CMD:
+
+.venv\Scripts\activate.bat
+
+Actualizar pip:
+
 python -m pip install --upgrade pip
+
+Instalar las dependencias:
+
 pip install -r requirements.txt
-```
-##macOS / Linux
+
+### macOS / Linux
+
+Crear un entorno virtual:
 python3 -m venv .venv
+
+Activarlo:
 source .venv/bin/activate
+
+Actualizar pip:
+
 python -m pip install --upgrade pip
+
+Instalar las dependencias:
 pip install -r requirements.txt
 
 
-Si PowerShell no permite activar el entorno, usa la terminal CMD y ejecuta `.venv\\Scripts\\activate.bat`.
 
 ## Credenciales
 
