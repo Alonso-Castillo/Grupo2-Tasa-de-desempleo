@@ -6,11 +6,12 @@
 WITH imacec_historico AS (
 
     SELECT
+        id_serie,
         fecha,
         valor AS imacec_actual,
 
         LAG(valor, 12) OVER (
-            ORDER BY fecha
+            PARTITION BY id_serie ORDER BY fecha
         ) AS imacec_anterior
 
     FROM observaciones

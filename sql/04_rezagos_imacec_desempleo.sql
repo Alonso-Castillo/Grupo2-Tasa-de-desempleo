@@ -4,10 +4,11 @@
 
 WITH imacec_base AS (
     SELECT
+        id_serie,
         fecha,
         valor,
         LAG(valor, 12) OVER (
-            ORDER BY fecha
+            PARTITION BY id_serie ORDER BY fecha
         ) AS valor_anterior
     FROM observaciones
     WHERE id_serie = 'F032.IMC.IND.Z.Z.EP18.Z.Z.0.M'
@@ -15,6 +16,7 @@ WITH imacec_base AS (
 
 imacec_crecimiento AS (
     SELECT
+        id_serie,
         fecha,
         (valor / NULLIF(valor_anterior, 0) - 1) * 100
             AS crecimiento_imacec
@@ -23,16 +25,17 @@ imacec_crecimiento AS (
 
 imacec_rezagos AS (
     SELECT
+        id_serie,
         fecha,
         crecimiento_imacec AS imacec_actual,
         LAG(crecimiento_imacec, 3) OVER (
-            ORDER BY fecha
+            PARTITION BY id_serie ORDER BY fecha
         ) AS imacec_rezago_3,
         LAG(crecimiento_imacec, 6) OVER (
-            ORDER BY fecha
+            PARTITION BY id_serie ORDER BY fecha
         ) AS imacec_rezago_6,
         LAG(crecimiento_imacec, 12) OVER (
-            ORDER BY fecha
+            PARTITION BY id_serie ORDER BY fecha
         ) AS imacec_rezago_12
     FROM imacec_crecimiento
 ),
@@ -42,7 +45,7 @@ desempleo AS (
         fecha,
         valor AS tasa_desempleo,
         valor - LAG(valor, 12) OVER (
-            ORDER BY fecha
+            PARTITION BY id_serie ORDER BY fecha
         ) AS variacion_desempleo_pp
     FROM observaciones
     WHERE id_serie = 'F049.DES.TAS.INE9.10.M'
