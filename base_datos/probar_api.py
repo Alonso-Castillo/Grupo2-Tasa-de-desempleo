@@ -44,12 +44,18 @@ def main() -> int:
     print(f"Probando {len(SERIES_BCCH)} series hasta {corte.isoformat()} (no escribe en la base de datos).")
     for serie in SERIES_BCCH:
         try:
+            # La TPM mensual no está disponible desde este endpoint de Siete.
+            # Se consulta su serie diaria y se calcula el promedio mensual.
+            es_tpm = serie["columna"] == "TPM"
+            codigo_descarga = "F022.TPM.TIN.D001.NO.Z.D" if es_tpm else serie["codigo"]
             datos = siete.cuadro(
-                series=[serie["codigo"]],
+                series=[codigo_descarga],
                 desde=serie["desde"],
                 hasta=corte.isoformat(),
                 nombres=[serie["columna"]],
             )
+            if es_tpm:
+                datos = datos.resample("MS").mean()
             if datos is None or serie["columna"] not in datos.columns:
                 raise ValueError("la API no devolvió la columna esperada")
             valores = datos[serie["columna"]].dropna()

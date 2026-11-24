@@ -56,13 +56,20 @@ def main():
             nombre = serie["nombre"]
             print(f"\nProcesando: {nombre}")
             try:
+                # La TPM mensual no está disponible desde este endpoint de Siete.
+                # Descargamos TPM diaria y guardamos su promedio por mes, sin
+                # cambiar el ID original de la serie en nuestra base SQLite.
+                es_tpm = serie["columna"] == "TPM"
+                codigo_descarga = "F022.TPM.TIN.D001.NO.Z.D" if es_tpm else serie["codigo"]
                 kwargs = {
-                    "series": [serie["codigo"]],
+                    "series": [codigo_descarga],
                     "desde": serie["desde"],
                     "hasta": fecha_corte.isoformat(),
                     "nombres": [serie["columna"]],
                 }
                 datos = siete.cuadro(**kwargs)
+                if es_tpm:
+                    datos = datos.resample("MS").mean()
                 if datos is None or serie["columna"] not in datos.columns:
                     raise ValueError("La API no devolvió la columna esperada.")
                 registros = []
