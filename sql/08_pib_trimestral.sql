@@ -6,6 +6,7 @@
 WITH pib AS (
 
     SELECT
+        o.id_serie,
         o.fecha,
         o.valor AS pib_real
 
@@ -25,7 +26,7 @@ pib_rezagos AS (
         pib_real,
 
         LAG(pib_real, 4) OVER (
-            ORDER BY fecha
+            PARTITION BY id_serie ORDER BY fecha
         ) AS pib_anio_anterior
 
     FROM pib

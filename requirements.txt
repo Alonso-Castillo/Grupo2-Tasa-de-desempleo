@@ -1,0 +1,9 @@
+bcchapi
+python-dotenv
+pandas
+numpy
+matplotlib
+seaborn
+statsmodels
+scipy
+jupyter

@@ -1,14 +1,21 @@
-# Credenciales de acceso a APIs
+# Credenciales: nunca subir tokens
 .env
 .env.*
+!.env.example
 
-# Entornos virtuales de Python
+# Entornos virtuales
 .venv/
 venv/
 
-# Archivos temporales de Python
+# Temporales de Python y Jupyter
 __pycache__/
-*.pyc
-
-# Archivos temporales de Jupyter
+*.py[cod]
 .ipynb_checkpoints/
+
+# Datos locales generados; mantener fuera de GitHub
+base_datos/*.db
+base_datos/*.sqlite
+base_datos/*.sqlite3
+
+# Salidas locales
+*.log
