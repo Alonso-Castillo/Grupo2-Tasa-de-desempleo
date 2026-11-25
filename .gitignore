@@ -19,3 +19,4 @@ base_datos/*.sqlite3
 
 # Salidas locales
 *.log
+.DS_Store
