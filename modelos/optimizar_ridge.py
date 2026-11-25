@@ -1,4 +1,18 @@
+"""
+Optimización del modelo Ridge para pronosticar la tasa de desempleo.
 
+El modelo utiliza predictores macroeconómicos rezagados para evitar usar
+información contemporánea o futura al momento de pronosticar.
+
+En particular, el crecimiento interanual del IMACEC se incorpora con un rezago
+de dos meses. Esta elección se basa en el análisis de correlaciones entre el
+crecimiento del IMACEC y la tasa de desempleo, donde la relación más intensa
+se observa en el rezago 2, con una correlación aproximada de -0.878.
+
+El signo negativo es coherente con la relación económica esperada: una mayor
+actividad económica tiende a asociarse con una menor tasa de desempleo después
+de cierto rezago.
+"""
 import sqlite3
 import numpy as np
 import pandas as pd
