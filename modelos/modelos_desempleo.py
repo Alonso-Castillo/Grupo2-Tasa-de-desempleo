@@ -3,7 +3,9 @@
 
 Compara pronósticos de un mes fuera de muestra mediante ventana expansiva:
 - Benchmark ingenuo: último valor observado.
-- ARIMA(1,1,1): modelo univariado.
+- - ARIMA(1,1,1): modelo univariado seleccionado a partir del diagnóstico de estacionariedad.
+  La prueba ADF mostró que la tasa de desempleo no es estacionaria en nivel, pero sí en primera
+  diferencia, justificando d=1. Los gráficos ACF y PACF sugieren una dinámica de bajo orden.
 - Ridge: predictores macroeconómicos rezagados y crecimiento del IMACEC
   con dos meses de rezago.
 
