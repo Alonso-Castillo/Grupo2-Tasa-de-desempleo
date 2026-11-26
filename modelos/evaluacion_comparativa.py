@@ -1,73 +1,74 @@
 
-"""Evaluación comparativa temporal de tres modelos de desempleo."""
+"""
+Evaluación comparativa de modelos de desempleo.
 
-from pathlib import Path
+Se realiza una evaluación retrospectiva a un mes
+mediante una ventana expansiva de entrenamiento.
+
+La configuración de Ridge se selecciona exclusivamente
+con información anterior al período de evaluación.
+"""
+
 import sqlite3
-import warnings
-
 import numpy as np
 import pandas as pd
 
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import mean_squared_error, mean_absolute_error
-
+import sklearn.preprocessing
 from statsmodels.tsa.arima.model import ARIMA
 
-
-ROOT = Path(__file__).resolve().parent.parent
-DB = ROOT / "base_datos" / "desempleo_chile.db"
-OUT = ROOT / "resultados"
-
-TARGET = "Tasa de desempleo nacional"
-
-PREDICTORS = [
-    "IMACEC total",
-    "Índice de Avisos Laborales de Internet (IALI)",
-    "Inflación IPC anual",
-    "Tasa de Política Monetaria (TPM)",
-    "Índice de Producción Manufacturera",
-    "Tipo de cambio observado (CLP/USD)",
-    "Precio del cobre refinado BML",
-]
-
-SQL = """
-SELECT o.fecha, s.nombre, o.valor
-FROM observaciones o
-JOIN series s ON s.id_serie = o.id_serie
-WHERE s.nombre IN (
-    'Tasa de desempleo nacional',
-    'IMACEC total',
-    'Índice de Avisos Laborales de Internet (IALI)',
-    'Inflación IPC anual',
-    'Tasa de Política Monetaria (TPM)',
-    'Índice de Producción Manufacturera',
-    'Tipo de cambio observado (CLP/USD)',
-    'Precio del cobre refinado BML'
+# Importar la configuración utilizada en la optimización.
+from optimizar_ridge import (
+    DB,
+    OUT,
+    CORTE,
+    MIN_TRAIN,
+    TARGET,
+    PREDICTORS,
+    ALPHAS,
+    REZAGOS,
+    SQL
 )
-ORDER BY o.fecha
-"""
 
 
-def main():
+# CARGA DE DATOS
 
-    print("\nCARGANDO BASE DE DATOS...")
+
+def cargar_datos():
+
+    if not DB.is_file():
+        raise FileNotFoundError(DB)
 
     with sqlite3.connect(DB) as con:
-        raw = pd.read_sql_query(SQL, con)
 
-    raw["fecha"] = pd.to_datetime(raw["fecha"])
-    raw["mes"] = raw["fecha"].dt.to_period("M")
+        raw = pd.read_sql_query(
+            SQL,
+            con,
+            params=[TARGET] + PREDICTORS
+        )
 
-    data = raw.pivot_table(
+    raw["mes"] = pd.to_datetime(
+        raw["fecha"]
+    ).dt.to_period("M")
+
+    data = raw.pivot(
         index="mes",
         columns="nombre",
-        values="valor",
-        aggfunc="last"
+        values="valor"
     ).sort_index()
 
+    faltantes = (
+        set([TARGET] + PREDICTORS)
+        - set(data.columns)
+    )
+
+    if faltantes:
+        raise ValueError(
+            f"Series faltantes: {faltantes}"
+        )
+
+    # Mantener una secuencia mensual regular.
     data = data.reindex(
         pd.period_range(
             data.index.min(),
@@ -76,170 +77,325 @@ def main():
         )
     )
 
-    y = data[TARGET].astype(float)
+    return data
 
-    available = [
-        c for c in PREDICTORS if c in data.columns
-    ]
 
-    # Predictores disponibles con un mes de rezago
-    features = data[available].shift(1)
+# CONFIGURACIÓN ÓPTIMA DE RIDGE
 
-    # Crecimiento interanual del IMACEC con dos meses de rezago
-    features["IMACEC_crecimiento_interanual_lag2"] = (
-        data["IMACEC total"].pct_change(12).shift(2) * 100
+def cargar_configuracion():
+
+    tabla = pd.read_csv(
+        OUT / "optimizacion_ridge.csv"
     )
 
-    # Muestra común para los tres modelos
-    supervised = features.join(
+    # Selección según los resultados de validación interna.
+    mejor = tabla.sort_values(
+        ["RMSE", "MAE"]
+    ).iloc[0]
+
+    nombre = mejor["configuracion"]
+    alpha = float(mejor["alpha"])
+    lag = int(mejor["rezago_imacec"])
+
+    sets = {
+
+        "Todos los predictores": PREDICTORS,
+
+        "IMACEC e indicadores laborales": [
+            PREDICTORS[0],
+            PREDICTORS[1],
+            PREDICTORS[4]
+        ]
+    }
+
+    if (
+        nombre not in sets
+        or alpha not in ALPHAS
+        or lag not in REZAGOS
+    ):
+        raise ValueError(
+            "Configuración Ridge incompatible."
+        )
+
+    columnas = sets[nombre] + [
+        f"imacec_yoy_lag{lag}"
+    ]
+
+    return nombre, alpha, lag, columnas
+
+
+# EVALUACIÓN FUERA DE MUESTRA
+
+def evaluar_modelos():
+
+    data = cargar_datos()
+
+    nombre, alpha, lag, columnas = (
+        cargar_configuracion()
+    )
+
+    # Variable objetivo.
+    y = data[TARGET].dropna().astype(float)
+
+    # Verificar continuidad temporal.
+    esperado = pd.period_range(
+        y.index.min(),
+        y.index.max(),
+        freq="M"
+    )
+
+    if not y.index.equals(esperado):
+        raise ValueError(
+            "Hay meses faltantes en desempleo."
+        )
+
+    # CONSTRUCCIÓN DE PREDICTORES
+
+    # Mantener la misma construcción de variables
+    # utilizada durante la optimización de Ridge.
+    #
+    # El rezago de dos meses busca reducir el riesgo
+    # de utilizar indicadores aún no publicados.
+
+    features = data[PREDICTORS].shift(2)
+
+    crecimiento = (
+        data["IMACEC total"]
+        .pct_change(12, fill_method=None) * 100
+    )
+
+    for k in REZAGOS:
+
+        features[f"imacec_yoy_lag{k}"] = (
+            crecimiento.shift(k)
+        )
+
+    # Muestra común para mantener consistencia
+    # con el procedimiento de optimización.
+    muestra = features.join(
         y.rename("objetivo")
     ).dropna()
 
-    months = supervised.index
+    # PERÍODO DE EVALUACIÓN
 
-    if len(months) < 90:
+    # Comenzar la evaluación después de finalizar
+    # la selección de hiperparámetros.
+    meses = y.index[y.index >= CORTE]
+
+    if len(meses) < 12:
         raise ValueError(
-            "No existen suficientes observaciones comunes."
+            "Menos de 12 meses de evaluación."
         )
 
-    # Cinco ventanas temporales expansivas
-    splitter = TimeSeriesSplit(n_splits=5)
+    faltan = meses.difference(muestra.index)
 
-    records = []
+    if len(faltan):
+        raise ValueError(
+            f"Predictores incompletos en: {list(faltan)}"
+        )
 
-    print("\nINICIANDO EVALUACIÓN COMPARATIVA...")
+    print("\nCONFIGURACIÓN SELECCIONADA DE RIDGE")
 
-    for fold, (train_idx, test_idx) in enumerate(
-        splitter.split(months), start=1
-    ):
+    print(f"Predictores: {nombre}")
+    print(f"Alpha: {alpha}")
+    print(f"Rezago IMACEC: {lag} meses")
 
-        test_months = months[test_idx]
+    print("\nPERÍODO DE EVALUACIÓN")
 
-        print(f"\nVENTANA {fold}")
+    print(f"Inicio: {meses[0]}")
+    print(f"Término: {meses[-1]}")
 
-        for month in test_months:
+    registros = []
 
-            train_y = y.loc[y.index < month]
+    # VENTANA EXPANSIVA
 
-            train_reg = supervised.loc[
-                supervised.index < month
-            ]
+    for mes in meses:
 
-            if len(train_y) < 60 or len(train_reg) < 60:
-                continue
+        # Utilizar únicamente observaciones anteriores
+        # al mes que se desea pronosticar.
+        train_y = y.loc[y.index < mes]
 
-            observed = float(y.loc[month])
+        train_reg = muestra.loc[
+            muestra.index < mes
+        ]
 
-            # 1. Benchmark ingenuo
-            naive_pred = float(train_y.iloc[-1])
-
-            # 2. ARIMA
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-
-                arima = ARIMA(
-                    train_y,
-                    order=(1, 1, 1)
-                ).fit()
-
-            arima_pred = float(
-                np.asarray(arima.forecast(steps=1))[0]
+        if (
+            len(train_reg) < MIN_TRAIN
+            or len(train_y) < 60
+        ):
+            raise ValueError(
+                f"Entrenamiento insuficiente en {mes}"
             )
 
-            # 3. Ridge optimizado
-            x_now = features.loc[[month]]
+        # MODELO 1: BENCHMARK INGENUO
 
-            ridge = make_pipeline(
-                StandardScaler(),
-                Ridge(alpha=500)
+        ingenuo = float(train_y.iloc[-1])
+
+        # MODELO 2: ARIMA (1,1,1)
+
+        ajuste = ARIMA(
+            train_y,
+            order=(1, 1, 1)
+        ).fit()
+
+        arima = float(
+            np.asarray(
+                ajuste.forecast(steps=1)
+            )[0]
+        )
+
+        # Registrar problemas de convergencia
+        # en lugar de ocultar las advertencias.
+        convergio = bool(
+            ajuste.mle_retvals.get(
+                "converged", False
             )
+        )
 
-            ridge.fit(
-                train_reg[features.columns],
-                train_reg["objetivo"]
-            )
+        # MODELO 3: RIDGE
 
-            ridge_pred = float(
-                ridge.predict(
-                    x_now[features.columns]
-                )[0]
-            )
+        ridge = make_pipeline(
+            sklearn.preprocessing.StandardScaler(),
+            Ridge(alpha=alpha)
+        )
 
-            records.append({
-                "ventana": fold,
-                "mes": str(month),
-                "observado": observed,
-                "benchmark_ingenuo": naive_pred,
-                "ARIMA_111": arima_pred,
-                "Ridge_alpha500": ridge_pred
-            })
+        # El escalamiento se estima exclusivamente
+        # utilizando la muestra de entrenamiento.
+        ridge.fit(
+            train_reg[columnas],
+            train_reg["objetivo"]
+        )
 
-    evaluation = pd.DataFrame(records)
+        pred_ridge = float(
+            ridge.predict(
+                features.loc[[mes], columnas]
+            )[0]
+        )
 
-    if evaluation.empty:
-        raise ValueError("No se generaron pronósticos.")
+        # REGISTRO DE RESULTADOS
 
-    # Métricas sobre exactamente los mismos meses
-    results = []
+        registros.append({
 
-    for column, name in [
-        ("benchmark_ingenuo", "Benchmark ingenuo"),
-        ("ARIMA_111", "ARIMA(1,1,1)"),
-        ("Ridge_alpha500", "Ridge alpha 500")
+            "mes": str(mes),
+
+            "observado": float(y.loc[mes]),
+
+            "benchmark_ingenuo": ingenuo,
+
+            "ARIMA_111": arima,
+
+            "Ridge_mejorado": pred_ridge,
+
+            "arima_convergio": convergio
+
+        })
+
+    evaluacion = pd.DataFrame(registros)
+
+    # MÉTRICAS DE EVALUACIÓN
+
+    resultados = []
+
+    for col, etiqueta in [
+
+        (
+            "benchmark_ingenuo",
+            "Benchmark ingenuo"
+        ),
+
+        (
+            "ARIMA_111",
+            "ARIMA(1,1,1)"
+        ),
+
+        (
+            "Ridge_mejorado",
+            f"Ridge alpha {alpha:g}, IMACEC lag {lag}"
+        )
+
     ]:
 
         error = (
-            evaluation[column] - evaluation["observado"]
+            evaluacion[col]
+            - evaluacion["observado"]
         )
 
-        results.append({
-            "modelo": name,
+        if not np.isfinite(error).all():
+            raise ValueError(
+                f"Pronósticos inválidos: {etiqueta}"
+            )
+
+        resultados.append({
+
+            "modelo": etiqueta,
+
             "n_pronosticos": len(error),
-            "RMSE": np.sqrt(np.mean(error ** 2)),
-            "MAE": np.mean(np.abs(error)),
+
+            "RMSE": np.sqrt(
+                np.mean(error ** 2)
+            ),
+
+            "MAE": np.mean(
+                np.abs(error)
+            ),
+
             "sesgo": np.mean(error)
+
         })
 
-    metrics = pd.DataFrame(results).sort_values("RMSE")
+    metricas = pd.DataFrame(
+        resultados
+    ).sort_values("RMSE")
+
+    return evaluacion, metricas, y
+
+# EXPORTACIÓN Y PRESENTACIÓN DE RESULTADOS
+
+def main():
+
+    evaluacion, metricas, _ = evaluar_modelos()
 
     OUT.mkdir(exist_ok=True)
 
-    evaluation.to_csv(
+    evaluacion.to_csv(
         OUT / "evaluacion_comparativa_temporal.csv",
         index=False,
         encoding="utf-8-sig"
     )
 
-    metrics.to_csv(
+    metricas.to_csv(
         OUT / "metricas_comparacion_temporal.csv",
         index=False,
         encoding="utf-8-sig"
     )
 
     print("\nRESULTADOS DE EVALUACIÓN COMPARATIVA")
+
     print(
-        metrics.to_string(
+        metricas.to_string(
             index=False,
             float_format=lambda x: f"{x:.4f}"
         )
     )
 
-    print("\nPERÍODO EVALUADO:")
-    print(evaluation["mes"].iloc[0], "a", evaluation["mes"].iloc[-1])
+    print("\nDIAGNÓSTICO DE CONVERGENCIA ARIMA")
 
-    print("\nPRONÓSTICOS POR VENTANA:")
     print(
-        evaluation.groupby("ventana")
-        .agg(
-            inicio=("mes", "min"),
-            fin=("mes", "max"),
-            observaciones=("mes", "count")
-        ).to_string()
+        "Ajustes sin convergencia:",
+        int(
+            (~evaluacion["arima_convergio"]).sum()
+        )
     )
 
     print("\nARCHIVOS GENERADOS:")
-    print("resultados/evaluacion_comparativa_temporal.csv")
-    print("resultados/metricas_comparacion_temporal.csv")
+
+    print(
+        "resultados/evaluacion_comparativa_temporal.csv"
+    )
+
+    print(
+        "resultados/metricas_comparacion_temporal.csv"
+    )
 
     print("\nEVALUACIÓN FINALIZADA.")
 
