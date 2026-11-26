@@ -70,7 +70,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--inicio-evaluacion",
-        default="2024-01",
+        default="2022-02",
         help="Primer mes de evaluación, AAAA-MM"
     )
     return parser.parse_args()
@@ -249,7 +249,7 @@ def main():
 
             model = make_pipeline(
                 StandardScaler(),
-                Ridge(alpha=1.0)
+                Ridge(alpha=500)
             )
 
             model.fit(

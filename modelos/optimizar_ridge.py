@@ -12,6 +12,16 @@ se observa en el rezago 2, con una correlación aproximada de -0.878.
 El signo negativo es coherente con la relación económica esperada: una mayor
 actividad económica tiende a asociarse con una menor tasa de desempleo después
 de cierto rezago.
+
+La optimización interna explora distintas configuraciones y valores de alpha.
+El mejor resultado dentro de esta etapa no 
+determina por si sola especificación final del modelo Ridge
+
+La selección definitiva se realiza en evaluacion_comparativa.py, donde los
+modelos se comparan bajo un mismo esquema de evaluación fuera de muestra.
+Aunque alpha=1000 obtiene el mejor resultado en la optimización interna,
+alpha=500 presenta un mejor desempeño en la evaluación comparativa final y,
+por ello, se utiliza como especificación definitiva del modelo Ridge.
 """
 import sqlite3
 import numpy as np
@@ -168,7 +178,7 @@ tabla.to_csv(
 print("\nRESULTADOS DE OPTIMIZACION RIDGE")
 print(tabla.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
 
-print("\nMEJOR CONFIGURACION")
+print("\nMEJOR CONFIGURACION EN LA OPTIMIZACION INTERNA")
 print(tabla.iloc[0].to_string())
 
 print("\nArchivo guardado:")
