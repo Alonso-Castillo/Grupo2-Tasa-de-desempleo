@@ -1,3 +1,4 @@
+
 # Credenciales: nunca subir tokens
 .env
 .env.*
@@ -6,17 +7,34 @@
 # Entornos virtuales
 .venv/
 venv/
+env/
 
-# Temporales de Python y Jupyter
+# Archivos temporales de Python y Jupyter
 __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
+.pytest_cache/
 
-# Datos locales generados; mantener fuera de GitHub
+# Bases de datos locales
 base_datos/*.db
 base_datos/*.sqlite
 base_datos/*.sqlite3
 
-# Salidas locales
+# Archivos auxiliares de SQLite
+base_datos/*-journal
+base_datos/*-wal
+base_datos/*-shm
+
+# Registros locales de actualizacion de datos
+base_datos/cambios_carga_*.csv
+
+# Resultados exploratorios temporales
+resultados/busqueda_series_bcch.csv
+
+# Archivos de registro
 *.log
+
+# Archivos temporales del sistema operativo
 .DS_Store
+Thumbs.db
+Desktop.ini

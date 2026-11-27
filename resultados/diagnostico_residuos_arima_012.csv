@@ -1,0 +1,7 @@
+﻿muestra,modelo,observaciones,observaciones_residuos,convergio,invertible,AIC,BIC,rezago,estadistico_Ljung_Box,p_valor,rechaza_h0,conclusion
+Entrenamiento anterior a 2024,"ARIMA(0,1,2)",166,165,True,True,23.455981950895147,32.77381837259689,6,5.793250665228233,0.215129640523179,False,No se rechaza ausencia de autocorrelación
+Entrenamiento anterior a 2024,"ARIMA(0,1,2)",166,165,True,True,23.455981950895147,32.77381837259689,12,14.206235345215875,0.16379071747921112,False,No se rechaza ausencia de autocorrelación
+Entrenamiento anterior a 2024,"ARIMA(0,1,2)",166,165,True,True,23.455981950895147,32.77381837259689,24,33.57317226018249,0.054253441778571214,False,No se rechaza ausencia de autocorrelación
+Completa,"ARIMA(0,1,2)",198,197,True,True,9.040222698934166,18.889833885148132,6,6.819981310497706,0.14571274653885952,False,No se rechaza ausencia de autocorrelación
+Completa,"ARIMA(0,1,2)",198,197,True,True,9.040222698934166,18.889833885148132,12,16.464613659096813,0.08708242481232406,False,No se rechaza ausencia de autocorrelación
+Completa,"ARIMA(0,1,2)",198,197,True,True,9.040222698934166,18.889833885148132,24,37.92461255461103,0.01868185082928775,True,Se rechaza ausencia de autocorrelación

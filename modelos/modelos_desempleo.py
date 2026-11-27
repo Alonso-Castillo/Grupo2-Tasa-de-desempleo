@@ -1,424 +1,367 @@
 
-"""Modelación y evaluación reproducible de la tasa de desempleo.
+"""
+Modelación y proyección de la tasa de desempleo en Chile.
 
-Compara pronósticos de un mes fuera de muestra mediante ventana expansiva:
-- Benchmark ingenuo: último valor observado.
-- - ARIMA(1,1,1): modelo univariado seleccionado a partir del diagnóstico de estacionariedad.
-  La prueba ADF mostró que la tasa de desempleo no es estacionaria en nivel, pero sí en primera
-  diferencia, justificando d=1. Los gráficos ACF y PACF sugieren una dinámica de bajo orden.
-- Ridge: predictores macroeconómicos rezagados y crecimiento del IMACEC
-  con dos meses de rezago.
+Se reutiliza la evaluación comparativa a un mes.
 
-Además estima un pronóstico ARIMA(1,1,1) a 12 meses con intervalos del 95%.
+Modelo econométrico seleccionado: ARIMA(0,1,2).
+Referencia principal a 12 meses: benchmark ingenuo.
+Modelo econométrico original: ARIMA(1,1,1).
+
+Se generan pronósticos e intervalos de predicción
+del 95% para las distintas especificaciones.
 """
 
-from __future__ import annotations
-
-import argparse
-import sqlite3
-import warnings
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from sklearn.linear_model import Ridge
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 from statsmodels.tsa.arima.model import ARIMA
+
+from evaluacion_comparativa import (
+    evaluar_modelos,
+    cargar_configuracion
+)
+
+
+
+# CONFIGURACIÓN
 
 
 ROOT = Path(__file__).resolve().parent.parent
-DB = ROOT / "base_datos" / "desempleo_chile.db"
+
 OUT = ROOT / "resultados"
 FIG = ROOT / "graficos"
 
-TARGET = "Tasa de desempleo nacional"
+HORIZONTE = 12
 
-PREDICTORS = [
-    "IMACEC total",
-    "Índice de Avisos Laborales de Internet (IALI)",
-    "Inflación IPC anual",
-    "Tasa de Política Monetaria (TPM)",
-    "Índice de Producción Manufacturera",
-    "Tipo de cambio observado (CLP/USD)",
-    "Precio del cobre refinado BML",
-]
+ORDEN_ARIMA = (0, 1, 2)
+ORDEN_ORIGINAL = (1, 1, 1)
 
-SQL = """
-SELECT o.fecha, s.nombre, o.valor
-FROM observaciones o
-JOIN series s ON s.id_serie = o.id_serie
-WHERE s.nombre IN (
-    'Tasa de desempleo nacional',
-    'IMACEC total',
-    'Índice de Avisos Laborales de Internet (IALI)',
-    'Inflación IPC anual',
-    'Tasa de Política Monetaria (TPM)',
-    'Índice de Producción Manufacturera',
-    'Tipo de cambio observado (CLP/USD)',
-    'Precio del cobre refinado BML'
-)
-ORDER BY o.fecha
-"""
+ALPHA_INTERVALO = 0.05
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--inicio-evaluacion",
-        default="2022-02",
-        help="Primer mes de evaluación, AAAA-MM"
-    )
-    return parser.parse_args()
+
+# ESTIMACIÓN ARIMA CON CONTROL DE CONVERGENCIA
 
 
-def load_data() -> pd.DataFrame:
+def estimar_arima(serie, orden):
 
-    if not DB.exists():
-        raise FileNotFoundError(
-            f"No existe {DB}. Ejecuta primero la carga de datos."
-        )
-
-    with sqlite3.connect(DB) as con:
-        raw = pd.read_sql_query(SQL, con)
-
-    if raw.empty:
-        raise ValueError("La consulta SQL no devolvió datos.")
-
-    raw["fecha"] = pd.to_datetime(
-        raw["fecha"], errors="coerce"
-    ).dt.to_period("M")
-
-    raw["valor"] = pd.to_numeric(
-        raw["valor"], errors="coerce"
-    )
-
-    wide = raw.pivot_table(
-        index="fecha",
-        columns="nombre",
-        values="valor",
-        aggfunc="last"
-    )
-
-    full_index = pd.period_range(
-        wide.index.min(),
-        wide.index.max(),
-        freq="M"
-    )
-
-    wide = wide.reindex(full_index)
-    wide.index.name = "mes"
-
-    if TARGET not in wide or wide[TARGET].dropna().empty:
-        raise ValueError(
-            "No se encontró la serie objetivo de desempleo."
-        )
-
-    return wide.sort_index()
-
-
-def rmse(y, pred):
-    return float(
-        np.sqrt(
-            np.mean(
-                (np.asarray(y) - np.asarray(pred)) ** 2
-            )
-        )
-    )
-
-
-def mae(y, pred):
-    return float(
-        np.mean(
-            np.abs(np.asarray(y) - np.asarray(pred))
-        )
-    )
-
-
-def main():
-
-    args = parse_args()
-    start = pd.Period(args.inicio_evaluacion, freq="M")
-
-    data = load_data()
-
-    y = data[TARGET].dropna().astype(float)
-
-    expected = pd.period_range(
-        y.index.min(),
-        y.index.max(),
-        freq="M"
-    )
-
-    if not expected.equals(y.index):
-        raise ValueError(
-            "La serie de desempleo tiene meses faltantes."
-        )
-
-    if len(y) < 60:
-        raise ValueError(
-            f"Solo hay {len(y)} observaciones. Se requieren al menos 60."
-        )
-
-    # --------------------------------------------------
-    # CONSTRUCCIÓN DE PREDICTORES PARA RIDGE
-    # --------------------------------------------------
-
-    available_predictors = [
-        c for c in PREDICTORS if c in data.columns
+    optimizadores = [
+        ("lbfgs", 200),
+        ("powell", 1000)
     ]
 
-    if len(available_predictors) < 2:
-        raise ValueError(
-            "No hay suficientes series explicativas en SQLite."
+    for metodo, iteraciones in optimizadores:
+
+        ajuste = ARIMA(
+            serie.astype(float),
+            order=orden
+        ).fit(
+            method="statespace",
+            method_kwargs={
+                "method": metodo,
+                "maxiter": iteraciones,
+                "disp": False
+            }
         )
 
-    # Predictores macroeconómicos con un mes de rezago
-    features = data[available_predictors].shift(1)
+        convergio = (
+            bool(
+                ajuste.mle_retvals.get(
+                    "converged", False
+                )
+            )
+            and np.isfinite(ajuste.llf)
+            and np.isfinite(ajuste.params).all()
+        )
 
-    # Nueva variable: crecimiento interanual del IMACEC
-    # con dos meses de rezago
-    features["IMACEC_crecimiento_interanual_lag2"] = (
-        data["IMACEC total"].pct_change(12).shift(2) * 100
+        if convergio:
+
+            print(
+                f"ARIMA{orden}: convergió "
+                f"mediante {metodo}"
+            )
+
+            return ajuste
+
+        print(
+            f"ARIMA{orden}: "
+            f"sin convergencia mediante {metodo}"
+        )
+
+    raise RuntimeError(
+        f"No se obtuvo convergencia en ARIMA{orden}"
     )
 
-    feature_cols = list(features.columns)
 
-    supervised = features.join(
-        y.rename("objetivo")
-    ).dropna()
 
-    # --------------------------------------------------
-    # EVALUACIÓN FUERA DE MUESTRA
-    # --------------------------------------------------
+# OBTENER PRONÓSTICOS E INTERVALOS
 
-    test_months = y.index[y.index >= start]
 
-    if len(test_months) < 12:
-        raise ValueError(
-            "Se necesitan al menos 12 meses de evaluación."
-        )
+def obtener_pronostico(ajuste):
 
-    records = []
+    fc = ajuste.get_forecast(
+        steps=HORIZONTE
+    )
 
-    for month in test_months:
+    media = np.asarray(
+        fc.predicted_mean,
+        dtype=float
+    )
 
-        train_y = y.loc[y.index < month]
+    intervalos = np.asarray(
+        fc.conf_int(alpha=ALPHA_INTERVALO),
+        dtype=float
+    )
 
-        if len(train_y) < 36:
-            continue
+    return (
+        media,
+        intervalos[:, 0],
+        intervalos[:, 1]
+    )
 
-        observed = float(y.loc[month])
 
-        # Benchmark ingenuo
-        naive = float(train_y.iloc[-1])
 
-        # ARIMA
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+# PROYECCIÓN A 12 MESES
 
-            arima_fit = ARIMA(
-                train_y.astype(float),
-                order=(1, 1, 1)
-            ).fit()
 
-        arima_pred = float(
-            np.asarray(
-                arima_fit.forecast(steps=1)
-            )[0]
-        )
+def proyectar_desempleo(y):
 
-        # RIDGE MEJORADO
-        train_reg = supervised.loc[
-            supervised.index < month
-        ]
+    # Estimar el modelo econométrico seleccionado.
 
-        x_now = features.loc[[month]]
+    ajuste_nuevo = estimar_arima(
+        y,
+        ORDEN_ARIMA
+    )
 
-        if (
-            train_reg.empty
-            or x_now[feature_cols].isna().any(axis=None)
-        ):
-            ridge_pred = np.nan
+    nuevo, inferior_nuevo, superior_nuevo = (
+        obtener_pronostico(ajuste_nuevo)
+    )
 
-        else:
+    # Conservar la especificación original.
 
-            model = make_pipeline(
-                StandardScaler(),
-                Ridge(alpha=500)
-            )
+    ajuste_original = estimar_arima(
+        y,
+        ORDEN_ORIGINAL
+    )
 
-            model.fit(
-                train_reg[feature_cols],
-                train_reg["objetivo"]
-            )
+    original, inferior_original, superior_original = (
+        obtener_pronostico(ajuste_original)
+    )
 
-            ridge_pred = float(
-                model.predict(
-                    x_now[feature_cols]
-                )[0]
-            )
 
-        records.append({
-            "mes": str(month),
-            "observado": observed,
-            "benchmark_ingenuo": naive,
-            "ARIMA_111": arima_pred,
-            "Ridge_mejorado": ridge_pred
-        })
+    # BENCHMARK INGENUO
 
-    evaluation = pd.DataFrame(records)
 
-    if evaluation.empty:
-        raise ValueError(
-            "No fue posible construir pronósticos de evaluación."
-        )
+    # El pronóstico puntual corresponde al último
+    # valor observado de la tasa de desempleo.
 
-    # --------------------------------------------------
-    # CÁLCULO DE MÉTRICAS
-    # --------------------------------------------------
+    benchmark = np.repeat(
+        float(y.iloc[-1]),
+        HORIZONTE
+    )
 
-    metrics = []
+    # Intervalos bajo el supuesto de caminata
+    # aleatoria sin deriva, con innovaciones
+    # independientes y aproximadamente normales.
 
-    for col, label in [
-        ("benchmark_ingenuo", "Benchmark ingenuo"),
-        ("ARIMA_111", "ARIMA(1,1,1)"),
-        ("Ridge_mejorado", "Ridge mejorado con IMACEC lag 2")
-    ]:
+    diferencias = y.diff().dropna().to_numpy()
 
-        sample = evaluation[
-            ["observado", col]
-        ].dropna()
+    sigma = np.sqrt(
+        np.mean(diferencias ** 2)
+    )
 
-        metrics.append({
-            "modelo": label,
-            "n_pronosticos": len(sample),
-            "RMSE_pp": rmse(
-                sample["observado"],
-                sample[col]
-            ),
-            "MAE_pp": mae(
-                sample["observado"],
-                sample[col]
-            )
-        })
+    horizontes = np.arange(
+        1, HORIZONTE + 1
+    )
 
-    metrics_df = pd.DataFrame(
-        metrics
-    ).sort_values("RMSE_pp")
+    amplitud = (
+        1.95996398454
+        * sigma
+        * np.sqrt(horizontes)
+    )
 
-    # --------------------------------------------------
-    # PRONÓSTICO ARIMA A 12 MESES
-    # --------------------------------------------------
+    inferior_benchmark = benchmark - amplitud
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+    superior_benchmark = benchmark + amplitud
 
-        final_fit = ARIMA(
-            y.astype(float),
-            order=(1, 1, 1)
-        ).fit()
 
-    fc = final_fit.get_forecast(steps=12)
+    # CONSTRUIR TABLA DE PROYECCIÓN
 
-    ci = fc.conf_int(alpha=0.05)
 
-    future = pd.period_range(
+    futuro = pd.period_range(
         y.index[-1] + 1,
-        periods=12,
+        periods=HORIZONTE,
         freq="M"
     )
 
-    forecast = pd.DataFrame({
-        "mes": [str(x) for x in future],
-        "pronostico_ARIMA_111": np.asarray(
-            fc.predicted_mean, dtype=float
-        ),
-        "limite_inferior_95": ci.iloc[:, 0].to_numpy(
-            dtype=float
-        ),
-        "limite_superior_95": ci.iloc[:, 1].to_numpy(
-            dtype=float
-        ),
-        "benchmark_ingenuo": float(y.iloc[-1])
+    pronostico = pd.DataFrame({
+
+        "mes": futuro.astype(str),
+
+        # Mantener las columnas originales para
+        # conservar compatibilidad con el proyecto.
+
+        "pronostico_ARIMA_111": original,
+
+        "limite_inferior_95": inferior_original,
+
+        "limite_superior_95": superior_original,
+
+        "benchmark_ingenuo": benchmark,
+
+        # Nuevo modelo econométrico.
+
+        "pronostico_ARIMA_012": nuevo,
+
+        "limite_inferior_ARIMA_012_95":
+            inferior_nuevo,
+
+        "limite_superior_ARIMA_012_95":
+            superior_nuevo,
+
+        # Intervalos del benchmark.
+
+        "limite_inferior_benchmark_95":
+            inferior_benchmark,
+
+        "limite_superior_benchmark_95":
+            superior_benchmark
+
     })
 
-    # --------------------------------------------------
-    # GUARDAR RESULTADOS
-    # --------------------------------------------------
 
-    OUT.mkdir(exist_ok=True)
-    FIG.mkdir(exist_ok=True)
+    # VALIDACIÓN DE RESULTADOS
 
-    evaluation.to_csv(
-        OUT / "predicciones_oos_modelos.csv",
-        index=False,
-        encoding="utf-8-sig"
-    )
 
-    metrics_df.to_csv(
-        OUT / "metricas_modelos.csv",
-        index=False,
-        encoding="utf-8-sig"
-    )
+    if len(pronostico) != HORIZONTE:
 
-    forecast.to_csv(
-        OUT / "pronostico_desempleo_12m.csv",
-        index=False,
-        encoding="utf-8-sig"
-    )
+        raise ValueError(
+            "Horizonte de pronóstico incorrecto."
+        )
 
-    # --------------------------------------------------
-    # GRÁFICO DE EVALUACIÓN
-    # --------------------------------------------------
+    numericas = pronostico.drop(
+        columns="mes"
+    ).to_numpy(dtype=float)
 
-    dates = pd.PeriodIndex(
-        evaluation["mes"],
+    if not np.isfinite(numericas).all():
+
+        raise ValueError(
+            "El pronóstico contiene valores inválidos."
+        )
+
+    grupos = [
+
+        (
+            "pronostico_ARIMA_111",
+            "limite_inferior_95",
+            "limite_superior_95"
+        ),
+
+        (
+            "pronostico_ARIMA_012",
+            "limite_inferior_ARIMA_012_95",
+            "limite_superior_ARIMA_012_95"
+        ),
+
+        (
+            "benchmark_ingenuo",
+            "limite_inferior_benchmark_95",
+            "limite_superior_benchmark_95"
+        )
+
+    ]
+
+    for media, inferior, superior in grupos:
+
+        validos = (
+            (pronostico[inferior] <= pronostico[media])
+            &
+            (pronostico[media] <= pronostico[superior])
+        )
+
+        if not validos.all():
+
+            raise ValueError(
+                f"Intervalos inconsistentes: {media}"
+            )
+
+    return pronostico, ajuste_nuevo, ajuste_original
+
+
+# GRÁFICO DE EVALUACIÓN FUERA DE MUESTRA
+
+
+def graficar_evaluacion(evaluacion):
+
+    fechas = pd.PeriodIndex(
+        evaluacion["mes"],
         freq="M"
     ).to_timestamp()
 
-    fig, ax = plt.subplots(figsize=(12, 5.5))
+    fig, ax = plt.subplots(
+        figsize=(12, 6)
+    )
 
     ax.plot(
-        dates,
-        evaluation["observado"],
+        fechas,
+        evaluacion["observado"],
         label="Observado",
-        linewidth=2.2
+        color="black",
+        linewidth=2.3
     )
 
     ax.plot(
-        dates,
-        evaluation["benchmark_ingenuo"],
-        label="Benchmark ingenuo",
-        linestyle="--"
+        fechas,
+        evaluacion["ARIMA_012"],
+        label="ARIMA(0,1,2)",
+        color="tab:blue",
+        linewidth=2
     )
 
     ax.plot(
-        dates,
-        evaluation["ARIMA_111"],
+        fechas,
+        evaluacion["ARIMA_111"],
         label="ARIMA(1,1,1)",
-        linestyle="-."
+        linestyle="-.",
+        color="tab:orange"
     )
 
     ax.plot(
-        dates,
-        evaluation["Ridge_mejorado"],
-        label="Ridge mejorado",
-        linestyle=":"
+        fechas,
+        evaluacion["benchmark_ingenuo"],
+        label="Benchmark ingenuo",
+        linestyle="--",
+        color="tab:green"
+    )
+
+    ax.plot(
+        fechas,
+        evaluacion["Ridge_mejorado"],
+        label="Ridge",
+        linestyle=":",
+        color="tab:red"
     )
 
     ax.set(
-        title="Desempleo en Chile: evaluación fuera de muestra",
+        title=(
+            "Chile: evaluación fuera de muestra "
+            "a un mes"
+        ),
         xlabel="Mes",
         ylabel="Tasa de desempleo (%)"
     )
 
     ax.grid(alpha=0.25)
-    ax.legend()
+
+    ax.legend(ncol=2)
+
     fig.tight_layout()
 
     fig.savefig(
@@ -428,54 +371,115 @@ def main():
 
     plt.close(fig)
 
-    # --------------------------------------------------
-    # GRÁFICO DE PRONÓSTICO A 12 MESES
-    # --------------------------------------------------
 
-    hist = y.iloc[-60:]
 
-    hist_dates = hist.index.to_timestamp()
-    future_dates = future.to_timestamp()
+# GRÁFICO DE PROYECCIÓN
 
-    fig, ax = plt.subplots(figsize=(12, 5.5))
+
+def graficar_pronostico(y, pronostico):
+
+    historia = y.iloc[-60:]
+
+    fechas_historia = (
+        historia.index.to_timestamp()
+    )
+
+    fechas_futuras = pd.PeriodIndex(
+        pronostico["mes"],
+        freq="M"
+    ).to_timestamp()
+
+    fig, ax = plt.subplots(
+        figsize=(12, 6)
+    )
+
+    # Serie histórica.
 
     ax.plot(
-        hist_dates,
-        hist.values,
+        fechas_historia,
+        historia.to_numpy(),
         label="Desempleo observado",
+        color="black",
         linewidth=2.2
     )
 
-    ax.plot(
-        future_dates,
-        forecast["pronostico_ARIMA_111"],
-        label="Pronóstico ARIMA(1,1,1)",
-        linewidth=2
-    )
-
-    ax.fill_between(
-        future_dates,
-        forecast["limite_inferior_95"],
-        forecast["limite_superior_95"],
-        alpha=0.18,
-        label="Intervalo 95%"
-    )
+    # Benchmark: referencia principal a 12 meses.
 
     ax.plot(
-        future_dates,
-        forecast["benchmark_ingenuo"],
+        fechas_futuras,
+        pronostico["benchmark_ingenuo"],
+        color="tab:green",
         linestyle="--",
+        linewidth=2.3,
         label="Benchmark ingenuo"
     )
 
+    ax.fill_between(
+
+        fechas_futuras,
+
+        pronostico["limite_inferior_benchmark_95"]
+        .to_numpy(dtype=float),
+
+        pronostico["limite_superior_benchmark_95"]
+        .to_numpy(dtype=float),
+
+        color="tab:green",
+
+        alpha=0.12,
+
+        label="Intervalo benchmark 95%"
+
+    )
+
+    # Alternativa econométrica seleccionada.
+
+    ax.plot(
+        fechas_futuras,
+        pronostico["pronostico_ARIMA_012"],
+        color="tab:blue",
+        linewidth=2,
+        label="ARIMA(0,1,2)"
+    )
+
+    ax.fill_between(
+
+        fechas_futuras,
+
+        pronostico["limite_inferior_ARIMA_012_95"]
+        .to_numpy(dtype=float),
+
+        pronostico["limite_superior_ARIMA_012_95"]
+        .to_numpy(dtype=float),
+
+        color="tab:blue",
+
+        alpha=0.15,
+
+        label="Intervalo ARIMA 95%"
+
+    )
+
+    ax.axvline(
+        fechas_historia[-1],
+        color="gray",
+        linestyle=":",
+        linewidth=1.2
+    )
+
     ax.set(
-        title="Chile: proyección de desempleo a 12 meses",
+        title=(
+            "Chile: proyección de la tasa "
+            "de desempleo a 12 meses"
+        ),
         xlabel="Mes",
         ylabel="Tasa de desempleo (%)"
     )
 
     ax.grid(alpha=0.25)
-    ax.legend()
+
+    ax.legend(ncol=2)
+
     fig.tight_layout()
 
     fig.savefig(
@@ -485,51 +489,284 @@ def main():
 
     plt.close(fig)
 
-    # --------------------------------------------------
-    # RESULTADOS EN TERMINAL
-    # --------------------------------------------------
 
-    print("\nEVALUACIÓN FUERA DE MUESTRA")
-    print(
-        metrics_df.to_string(
+# PROGRAMA PRINCIPAL
+
+
+def main():
+
+    OUT.mkdir(exist_ok=True)
+    FIG.mkdir(exist_ok=True)
+
+    # Reutilizar la evaluación comparativa.
+
+    evaluacion, metricas, y = evaluar_modelos()
+
+    nombre, alpha, lag, columnas = (
+        cargar_configuracion()
+    )
+
+    # Verificar convergencia de ambos ARIMA.
+
+    fallos_original = int(
+        (~evaluacion["arima_convergio"]).sum()
+    )
+
+    fallos_nuevo = int(
+        (~evaluacion["arima_012_convergio"]).sum()
+    )
+
+    if fallos_original + fallos_nuevo > 0:
+
+        raise RuntimeError(
+            "Existen ajustes sin convergencia."
+        )
+
+    # Estimar y proyectar ambos ARIMA.
+
+    pronostico, ajuste_nuevo, ajuste_original = (
+        proyectar_desempleo(y)
+    )
+
+
+    # EXPORTACIÓN DE RESULTADOS
+
+
+    for archivo in [
+
+        "predicciones_oos_modelos.csv",
+
+        "evaluacion_comparativa_temporal.csv"
+
+    ]:
+
+        evaluacion.to_csv(
+            OUT / archivo,
             index=False,
-            float_format=lambda v: f"{v:.4f}"
+            encoding="utf-8-sig"
+        )
+
+    metricas.to_csv(
+
+        OUT / "metricas_comparacion_temporal.csv",
+
+        index=False,
+
+        encoding="utf-8-sig"
+
+    )
+
+    metricas.rename(columns={
+
+        "RMSE": "RMSE_pp",
+
+        "MAE": "MAE_pp"
+
+    }).to_csv(
+
+        OUT / "metricas_modelos.csv",
+
+        index=False,
+
+        encoding="utf-8-sig"
+
+    )
+
+    pronostico.to_csv(
+
+        OUT / "pronostico_desempleo_12m.csv",
+
+        index=False,
+
+        encoding="utf-8-sig"
+
+    )
+
+
+    # GENERACIÓN DE GRÁFICOS
+
+
+    graficar_evaluacion(evaluacion)
+
+    graficar_pronostico(y, pronostico)
+
+
+    # PRESENTACIÓN DE RESULTADOS
+
+
+    print("\nEVALUACIÓN FUERA DE MUESTRA A UN MES")
+
+    print(
+        metricas.to_string(
+            index=False,
+            float_format=lambda x: f"{x:.4f}"
         )
     )
 
+    print("\nCONFIGURACIÓN RIDGE")
+
+    print(f"Predictores: {nombre}")
+    print(f"Alpha: {alpha}")
+    print(f"Rezago IMACEC: {lag} meses")
+
+    print("\nSERIE OBJETIVO")
+
+    print(f"Inicio: {y.index.min()}")
+    print(f"Término: {y.index.max()}")
+    print(f"Observaciones: {len(y)}")
+
     print(
-        f"\nSerie objetivo: {y.index.min()} a {y.index.max()}"
-        f" ({len(y)} observaciones)"
+        f"Último dato observado: {y.iloc[-1]:.4f}%"
+    )
+
+    print("\nDIAGNÓSTICO DE CONVERGENCIA")
+
+    print(
+        f"ARIMA(1,1,1) sin convergencia: "
+        f"{fallos_original}"
     )
 
     print(
-        f"Evaluación: {evaluation.mes.iloc[0]} "
-        f"a {evaluation.mes.iloc[-1]}"
+        f"ARIMA(0,1,2) sin convergencia: "
+        f"{fallos_nuevo}"
     )
 
-    print("\nPredictores utilizados por Ridge:")
-    for col in feature_cols:
-        print("-", col)
+    print("\nMODELO ECONOMÉTRICO SELECCIONADO")
+
+    print(f"ARIMA{ORDEN_ARIMA}")
+
+    print(f"AIC: {ajuste_nuevo.aic:.4f}")
+
+    print(f"BIC: {ajuste_nuevo.bic:.4f}")
+
+    print("\nCoeficientes estimados:")
+
+    print(ajuste_nuevo.params.to_string())
+
+    print("\nP-valores de los coeficientes:")
+
+    print(ajuste_nuevo.pvalues.to_string())
+
+    print("\nPROYECCIÓN A 12 MESES")
+
+    columnas_resumen = [
+
+        "mes",
+
+        "benchmark_ingenuo",
+
+        "pronostico_ARIMA_012",
+
+        "limite_inferior_ARIMA_012_95",
+
+        "limite_superior_ARIMA_012_95"
+
+    ]
 
     print(
-        "\nPronóstico ARIMA guardado en "
-        "resultados/pronostico_desempleo_12m.csv"
+
+        pronostico[columnas_resumen].to_string(
+
+            index=False,
+
+            float_format=lambda x: f"{x:.4f}"
+
+        )
+
+    )
+
+    ultimo = pronostico.iloc[-1]
+
+    print("\nRESUMEN DEL PRONÓSTICO")
+
+    print(f"Mes proyectado: {ultimo['mes']}")
+
+    print("\nBENCHMARK INGENUO")
+
+    print(
+        f"Tasa proyectada: "
+        f"{ultimo['benchmark_ingenuo']:.4f}%"
     )
 
     print(
-        "\nEvaluación guardada en "
-        "resultados/predicciones_oos_modelos.csv"
+        f"Intervalo inferior 95%: "
+        f"{ultimo['limite_inferior_benchmark_95']:.4f}%"
     )
 
     print(
-        "\nMétricas guardadas en "
-        "resultados/metricas_modelos.csv"
+        f"Intervalo superior 95%: "
+        f"{ultimo['limite_superior_benchmark_95']:.4f}%"
     )
 
-    print("\nAnálisis terminado.")
+    print("\nARIMA(0,1,2)")
+
     print(
-        "Advertencia: verificar disponibilidad y fechas "
-        "de publicación de los predictores."
+        f"Tasa proyectada: "
+        f"{ultimo['pronostico_ARIMA_012']:.4f}%"
+    )
+
+    print(
+        f"Intervalo inferior 95%: "
+        f"{ultimo['limite_inferior_ARIMA_012_95']:.4f}%"
+    )
+
+    print(
+        f"Intervalo superior 95%: "
+        f"{ultimo['limite_superior_ARIMA_012_95']:.4f}%"
+    )
+
+    print("\nARIMA(1,1,1) ORIGINAL")
+
+    print(
+        f"Tasa proyectada: "
+        f"{ultimo['pronostico_ARIMA_111']:.4f}%"
+    )
+
+    print("\nARCHIVOS GENERADOS")
+
+    print("resultados/predicciones_oos_modelos.csv")
+
+    print("resultados/metricas_modelos.csv")
+
+    print("resultados/evaluacion_comparativa_temporal.csv")
+
+    print("resultados/metricas_comparacion_temporal.csv")
+
+    print("resultados/pronostico_desempleo_12m.csv")
+
+    print("graficos/12_evaluacion_modelos.png")
+
+    print("graficos/13_pronostico_12_meses.png")
+
+    print("\nMODELACIÓN FINALIZADA.")
+
+    print(
+
+        "El benchmark obtuvo el menor RMSE "
+        "en la evaluación retrospectiva a 12 meses."
+
+    )
+
+    print(
+
+        "ARIMA(0,1,2) se mantiene como alternativa "
+        "econométrica y obtuvo el menor RMSE a un mes."
+
+    )
+
+    print(
+
+        "Los intervalos del benchmark suponen una "
+        "caminata aleatoria sin deriva."
+
+    )
+
+    print(
+
+        "La evaluación utiliza datos históricos "
+        "disponibles actualmente y no corresponde "
+        "a un test completamente inexplorado."
+
     )
 
 
