@@ -1,0 +1,7 @@
+﻿muestra,modelo,convergio,AIC,BIC,rezago,estadistico_Ljung_Box,p_valor,conclusion
+Entrenamiento anterior a 2024,"ARIMA(1,1,1)",True,55.09898637410464,64.41682279580638,6,27.332945259774707,1.702362428957169e-05,Se rechaza ausencia de autocorrelación
+Entrenamiento anterior a 2024,"ARIMA(1,1,1)",True,55.09898637410464,64.41682279580638,12,42.93180596393349,5.114595602883057e-06,Se rechaza ausencia de autocorrelación
+Entrenamiento anterior a 2024,"ARIMA(1,1,1)",True,55.09898637410464,64.41682279580638,24,79.47237487749157,1.978285707330008e-08,Se rechaza ausencia de autocorrelación
+Completa,"ARIMA(1,1,1)",True,49.46694744894282,59.31655863515678,6,33.74335754598894,8.411788764971359e-07,Se rechaza ausencia de autocorrelación
+Completa,"ARIMA(1,1,1)",True,49.46694744894282,59.31655863515678,12,50.29903364114594,2.351483948313071e-07,Se rechaza ausencia de autocorrelación
+Completa,"ARIMA(1,1,1)",True,49.46694744894282,59.31655863515678,24,87.63031678150344,8.64543746066207e-10,Se rechaza ausencia de autocorrelación
