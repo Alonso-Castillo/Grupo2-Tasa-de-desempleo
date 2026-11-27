@@ -1,68 +1,424 @@
 
+"""
+Descarga y contrastación de las series económicas principales.
+
+Fuente: Base de Datos Estadísticos del Banco Central de Chile.
+
+La descarga utiliza la cobertura temporal de la investigación.
+La base SQLite se consulta exclusivamente en modo lectura.
+"""
+
 from pathlib import Path
 import os
+import sqlite3
+
 import bcchapi
+import numpy as np
+import pandas as pd
+
 from dotenv import load_dotenv
 
-# 1. Identificar la carpeta principal del proyecto
-RUTA_PROYECTO = Path(__file__).resolve().parent.parent
 
-# 2. Cargar las credenciales guardadas en .env
-load_dotenv(RUTA_PROYECTO / ".env")
+# ==================================================
+# 1. CONFIGURACIÓN
+# ==================================================
 
-token = os.getenv("BCCH_API_TOKEN")
+ROOT = Path(__file__).resolve().parent.parent
 
-# 3. Verificar que exista el token
-if not token:
-    raise ValueError("No se encontró el token en el archivo .env")
+DB = ROOT / "base_datos" / "desempleo_chile.db"
 
-# 4. Conectarnos con el Banco Central
-siete = bcchapi.Siete(token=token)
+FECHA_FINAL = "2026-08-31"
 
-print("Consultando el catálogo del Banco Central...")
+TOLERANCIA = 1e-6
+
+SERIES = [
+    {
+        "codigo": "F049.DES.TAS.INE9.10.M",
+        "nombre": "Desempleo_nacional",
+        "desde": "2010-03-01",
+        "observaciones_esperadas": 198
+    },
+    {
+        "codigo": "F032.IMC.IND.Z.Z.EP18.Z.Z.0.M",
+        "nombre": "IMACEC_total",
+        "desde": "2010-01-01",
+        "observaciones_esperadas": 200
+    }
+]
 
 
-# 5. Código oficial de la tasa de desempleo nacional
-codigo_desempleo = "F049.DES.TAS.INE9.10.M"
+# ==================================================
+# 2. CONEXIÓN CON EL BANCO CENTRAL
+# ==================================================
 
-# 6. Descargar las observaciones históricas
-print("Descargando tasa de desempleo nacional...")
+def conectar_bcch():
 
-desempleo = siete.cuadro(
-    series=[codigo_desempleo],
-    desde="2010-03-01",
-    nombres=["Desempleo_nacional"]
-)
+    load_dotenv(ROOT / ".env")
 
-# 7. Mostrar resultados de la descarga
-print("\nPrimeras observaciones:")
-print(desempleo.head())
+    token = os.getenv("BCCH_API_TOKEN", "").strip()
 
-print("\nÚltimas observaciones:")
-print(desempleo.tail())
+    if not token:
+        raise ValueError(
+            "No se encontró BCCH_API_TOKEN."
+        )
 
-print("\nTotal de observaciones:", len(desempleo))
-print("Primera fecha:", desempleo.index.min())
-print("Última fecha:", desempleo.index.max())
+    return bcchapi.Siete(token=token)
 
-# 8. Descargar IMACEC total
-codigo_imacec = "F032.IMC.IND.Z.Z.EP18.Z.Z.0.M"
 
-print("\nDescargando IMACEC total...")
+# ==================================================
+# 3. VALIDACIÓN DE LAS OBSERVACIONES
+# ==================================================
 
-imacec = siete.cuadro(
-    series=[codigo_imacec],
-    desde="2010-01-01",
-    nombres=["IMACEC_total"]
-)
+def validar_serie(serie, configuracion):
 
-# 9. Revisar los datos descargados
-print("\nPrimeras observaciones del IMACEC:")
-print(imacec.head())
+    nombre = configuracion["nombre"]
 
-print("\nÚltimas observaciones del IMACEC:")
-print(imacec.tail())
+    if serie.empty:
+        raise ValueError(f"{nombre}: serie vacía.")
 
-print("\nTotal de observaciones IMACEC:", len(imacec))
-print("Primera fecha:", imacec.index.min())
-print("Última fecha:", imacec.index.max())
+    serie = serie.copy()
+
+    if isinstance(serie.index, pd.PeriodIndex):
+
+        serie.index = serie.index.asfreq("M")
+
+    else:
+
+        if pd.api.types.is_numeric_dtype(
+            serie.index.dtype
+        ):
+            raise ValueError(
+                f"{nombre}: índice sin fechas válidas."
+            )
+
+        fechas = pd.to_datetime(
+            serie.index,
+            errors="raise"
+        )
+
+        serie.index = fechas.to_period("M")
+
+    if serie.index.hasnans:
+        raise ValueError(
+            f"{nombre}: existen fechas inválidas."
+        )
+
+    if serie.index.duplicated().any():
+        raise ValueError(
+            f"{nombre}: existen períodos duplicados."
+        )
+
+    serie = pd.to_numeric(
+        serie,
+        errors="coerce"
+    )
+
+    if not np.isfinite(serie.to_numpy()).all():
+        raise ValueError(
+            f"{nombre}: existen valores inválidos."
+        )
+
+    serie = serie.sort_index()
+
+    periodos_esperados = pd.period_range(
+        start=configuracion["desde"],
+        end=FECHA_FINAL,
+        freq="M"
+    )
+
+    faltantes = periodos_esperados.difference(
+        serie.index
+    )
+
+    adicionales = serie.index.difference(
+        periodos_esperados
+    )
+
+    if len(faltantes) > 0:
+        raise ValueError(
+            f"{nombre}: períodos faltantes: "
+            f"{faltantes.tolist()}"
+        )
+
+    if len(adicionales) > 0:
+        raise ValueError(
+            f"{nombre}: períodos fuera de la muestra."
+        )
+
+    if len(serie) != configuracion[
+        "observaciones_esperadas"
+    ]:
+        raise ValueError(
+            f"{nombre}: cantidad incorrecta "
+            "de observaciones."
+        )
+
+    return serie
+
+
+# ==================================================
+# 4. DESCARGA DESDE LA API
+# ==================================================
+
+def descargar_serie(siete, configuracion):
+
+    codigo = configuracion["codigo"]
+    nombre = configuracion["nombre"]
+
+    print(f"\nDescargando: {nombre}")
+    print(f"Código: {codigo}")
+
+    try:
+
+        datos = siete.cuadro(
+            series=[codigo],
+            desde=configuracion["desde"],
+            hasta=FECHA_FINAL,
+            nombres=[nombre]
+        )
+
+    except Exception as error:
+
+        raise RuntimeError(
+            f"Error de descarga para {nombre}: "
+            f"{type(error).__name__}"
+        ) from None
+
+    if not isinstance(datos, pd.DataFrame):
+        raise TypeError(
+            f"{nombre}: respuesta inesperada de la API."
+        )
+
+    if nombre not in datos.columns:
+        raise ValueError(
+            f"{nombre}: columna no encontrada."
+        )
+
+    return validar_serie(
+        datos[nombre],
+        configuracion
+    )
+
+
+# ==================================================
+# 5. LECTURA DE SQLITE
+# ==================================================
+
+def leer_serie_local(conexion, configuracion):
+
+    consulta = """
+        SELECT fecha, valor
+        FROM observaciones
+        WHERE id_serie = ?
+        ORDER BY fecha
+    """
+
+    datos = pd.read_sql_query(
+        consulta,
+        conexion,
+        params=[configuracion["codigo"]]
+    )
+
+    serie = datos.set_index("fecha")["valor"]
+
+    return validar_serie(
+        serie,
+        configuracion
+    )
+
+
+# ==================================================
+# 6. COMPARACIÓN DE OBSERVACIONES
+# ==================================================
+
+def comparar_series(api, local, configuracion):
+
+    comparacion = pd.DataFrame({
+        "valor_api": api,
+        "valor_sqlite": local
+    })
+
+    comparacion["diferencia"] = (
+        comparacion["valor_api"]
+        - comparacion["valor_sqlite"]
+    )
+
+    comparacion["diferencia_absoluta"] = (
+        comparacion["diferencia"].abs()
+    )
+
+    distintas = comparacion.loc[
+        comparacion["diferencia_absoluta"]
+        > TOLERANCIA
+    ]
+
+    print("\nRESULTADOS DE LA COMPARACIÓN")
+    print("-" * 60)
+
+    print(
+        "Observaciones API:",
+        len(api)
+    )
+
+    print(
+        "Observaciones SQLite:",
+        len(local)
+    )
+
+    print(
+        "Primera observación:",
+        api.index.min()
+    )
+
+    print(
+        "Última observación:",
+        api.index.max()
+    )
+
+    print(
+        "Tolerancia numérica:",
+        TOLERANCIA
+    )
+
+    print(
+        "Observaciones coincidentes:",
+        len(comparacion) - len(distintas)
+    )
+
+    print(
+        "Observaciones con diferencias:",
+        len(distintas)
+    )
+
+    print(
+        "Diferencia absoluta máxima:",
+        f"{comparacion['diferencia_absoluta'].max():.10f}"
+    )
+
+    if distintas.empty:
+
+        print(
+            "Resultado: COINCIDENCIA DENTRO "
+            "DE LA TOLERANCIA."
+        )
+
+    else:
+
+        print(
+            "Resultado: SE DETECTARON DIFERENCIAS."
+        )
+
+        print(
+            "\nPrimeras observaciones con diferencias:"
+        )
+
+        print(
+            distintas.head(10).to_string()
+        )
+
+    return {
+        "indicador": configuracion["nombre"],
+        "codigo": configuracion["codigo"],
+        "observaciones": len(comparacion),
+        "coincidentes": len(comparacion) - len(distintas),
+        "diferencias": len(distintas),
+        "diferencia_maxima": (
+            comparacion["diferencia_absoluta"].max()
+        )
+    }
+
+
+# ==================================================
+# 7. PROGRAMA PRINCIPAL
+# ==================================================
+
+def main():
+
+    print("\nVERIFICACIÓN DE SERIES ECONÓMICAS")
+    print("=" * 60)
+
+    print("Fuente: Banco Central de Chile")
+    print("Fecha final de la muestra:", FECHA_FINAL)
+
+    if not DB.is_file():
+        raise FileNotFoundError(
+            "No se encontró la base SQLite."
+        )
+
+    try:
+
+        siete = conectar_bcch()
+
+    except Exception as error:
+
+        print(
+            "Error de conexión:",
+            type(error).__name__
+        )
+
+        raise SystemExit(1) from None
+
+    resultados = []
+
+    # Apertura exclusiva en modo lectura.
+
+    conexion = sqlite3.connect(
+        DB.resolve().as_uri() + "?mode=ro",
+        uri=True
+    )
+
+    try:
+
+        for configuracion in SERIES:
+
+            api = descargar_serie(
+                siete,
+                configuracion
+            )
+
+            local = leer_serie_local(
+                conexion,
+                configuracion
+            )
+
+            resumen = comparar_series(
+                api,
+                local,
+                configuracion
+            )
+
+            resultados.append(resumen)
+
+    finally:
+
+        conexion.close()
+
+    resumen_final = pd.DataFrame(resultados)
+
+    print("\nRESUMEN GENERAL")
+    print("=" * 60)
+
+    print(
+        resumen_final.to_string(index=False)
+    )
+
+    print("\nVERIFICACIÓN FINALIZADA.")
+
+    print(
+        "La base SQLite no fue modificada."
+    )
+
+    print(
+        "Las diferencias pueden corresponder a "
+        "revisiones históricas, precisión numérica "
+        "o discrepancias en la carga original."
+    )
+
+    print(
+        "No se actualizan automáticamente "
+        "las observaciones locales."
+    )
+
+
+if __name__ == "__main__":
+    main()
