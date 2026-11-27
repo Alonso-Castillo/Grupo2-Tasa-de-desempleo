@@ -1,0 +1,13 @@
+﻿comprobacion,incidencias,estado,detalle
+Integridad SQLite,0,OK,ok
+Violaciones de claves foráneas,0,OK,
+Grupos de observaciones duplicadas,0,OK,
+Observaciones con datos nulos,0,OK,
+Observaciones sin serie asociada,0,OK,
+Valores almacenados como no numéricos,0,OK,
+Identificadores de serie duplicados,0,OK,
+Series sin identificador o nombre,0,OK,
+Series sin observaciones,0,OK,
+Fechas inválidas o ausentes,0,OK,
+"Valores nulos, no convertibles o infinitos",0,OK,
+Series con incidencias,0,OK,
